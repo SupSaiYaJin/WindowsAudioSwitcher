@@ -48,6 +48,77 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Device picker row: status dot | friendly name | (not ready) badge.
+             A USB wireless receiver whose paired headset is powered off still
+             enumerates as Active, so we surface the probe result here. -->
+        <DataTemplate x:Key="DeviceItemTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Ellipse Grid.Column="0"
+                         Width="9" Height="9"
+                         VerticalAlignment="Center"
+                         Margin="0,0,12,0">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{StaticResource StatusGoodBrush}"/>
+                            <Setter Property="ToolTip" Value="Ready — can play/capture audio"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsUsable}" Value="False">
+                                    <Setter Property="Fill" Value="{StaticResource StatusBadBrush}"/>
+                                    <Setter Property="ToolTip" Value="Not ready — endpoint present but audio stream failed to open (e.g. USB receiver with headset powered off)"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
+
+                <TextBlock Grid.Column="1"
+                           Text="{Binding FriendlyName}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           FontSize="13">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsUsable}" Value="False">
+                                    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <Border Grid.Column="2"
+                        CornerRadius="9"
+                        Padding="8,2"
+                        Margin="8,0,0,0"
+                        VerticalAlignment="Center"
+                        Background="{StaticResource StatusBadBrush}"
+                        Visibility="Collapsed">
+                    <TextBlock Text="NOT READY"
+                               Foreground="White"
+                               FontSize="9"
+                               FontWeight="SemiBold"/>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsUsable}" Value="False">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                </Border>
+            </Grid>
+        </DataTemplate>
     </ui:FluentWindow.Resources>
 
     <Grid>
@@ -134,7 +205,7 @@
                         <ListBox x:Name="DeviceList"
                                  Background="Transparent"
                                  BorderThickness="0"
-                                 DisplayMemberPath="FriendlyName"
+                                 ItemTemplate="{StaticResource DeviceItemTemplate}"
                                  ItemContainerStyle="{StaticResource AddRuleDeviceItemStyle}"
                                  SelectionChanged="DeviceList_SelectionChanged"
                                  MouseDoubleClick="DeviceList_DoubleClick"/>

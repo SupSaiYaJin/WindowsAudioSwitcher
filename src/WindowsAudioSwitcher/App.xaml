@@ -25,6 +25,7 @@
             <Color x:Key="AccentPurpleColor">#FFA855F7</Color>
             <Color x:Key="StatusGoodColor">#FF10B981</Color>
             <Color x:Key="StatusWarnColor">#FFF59E0B</Color>
+            <Color x:Key="StatusBadColor">#FFEF4444</Color>
 
             <SolidColorBrush x:Key="SurfaceBrush"         Color="{StaticResource SurfaceColor}"/>
             <SolidColorBrush x:Key="SurfaceElevatedBrush" Color="{StaticResource SurfaceElevatedColor}"/>
@@ -37,6 +38,7 @@
             <SolidColorBrush x:Key="AccentPurpleBrush"    Color="{StaticResource AccentPurpleColor}"/>
             <SolidColorBrush x:Key="StatusGoodBrush"      Color="{StaticResource StatusGoodColor}"/>
             <SolidColorBrush x:Key="StatusWarnBrush"      Color="{StaticResource StatusWarnColor}"/>
+            <SolidColorBrush x:Key="StatusBadBrush"       Color="{StaticResource StatusBadColor}"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

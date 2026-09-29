@@ -19,6 +19,9 @@ public sealed class RuleEngine
     /// <summary>
     /// Walk the priority list, return the first enabled rule that matches an
     /// active device. Pure function — easy to unit-test.
+    /// Devices that failed the usability probe (e.g. a USB wireless receiver whose
+    /// paired headset is powered off) are skipped so we never route audio to a
+    /// endpoint that can't actually play it.
     /// </summary>
     public static AudioDevice? PickTarget(IList<Rule> priority, DeviceSnapshot snapshot)
     {
@@ -28,6 +31,7 @@ public sealed class RuleEngine
             if (!rule.IsEnabled) continue;
             foreach (var d in snapshot.Devices)
             {
+                if (!d.IsUsable) continue;
                 if (rule.Matches(d.Id, d.FriendlyName)) return d;
             }
         }

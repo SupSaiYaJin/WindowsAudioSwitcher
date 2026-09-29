@@ -7,8 +7,8 @@ namespace WindowsAudioSwitcher.Tests;
 
 public class RuleEngineTests
 {
-    private static AudioDevice Dev(string id, string name) =>
-        new(id, name, DataFlow.Render, IsDefault: false);
+    private static AudioDevice Dev(string id, string name, bool isUsable = true) =>
+        new(id, name, DataFlow.Render, IsDefault: false, IsUsable: isUsable);
 
     private static DeviceSnapshot Snap(string defaultId, params AudioDevice[] devices) =>
         new(devices, defaultId);
@@ -83,5 +83,35 @@ public class RuleEngineTests
         var picked = RuleEngine.PickTarget(rules, snap);
         Assert.NotNull(picked);
         Assert.Equal(id, picked!.Id);
+    }
+
+    [Fact]
+    public void PickTarget_SkipsUnusableDevice_FallsThroughToNextMatch()
+    {
+        // The Sony device matches the top rule but its endpoint failed the
+        // usability probe (e.g. a USB wireless receiver whose headset is off).
+        // We must not route to it; fall through to the next matching rule.
+        var rules = new List<Rule>
+        {
+            new() { Kind = RuleKind.NameContains, Value = "Sony"    },
+            new() { Kind = RuleKind.NameContains, Value = "Realtek" },
+        };
+        var snap = Snap("a",
+            Dev("a", "Realtek(R) Audio", isUsable: true),
+            Dev("b", "Sony WH-1000XM4",  isUsable: false));
+        var picked = RuleEngine.PickTarget(rules, snap);
+        Assert.NotNull(picked);
+        Assert.Equal("a", picked!.Id);
+    }
+
+    [Fact]
+    public void PickTarget_OnlyMatchIsUnusable_ReturnsNull()
+    {
+        var rules = new List<Rule>
+        {
+            new() { Kind = RuleKind.NameContains, Value = "Sony" },
+        };
+        var snap = Snap("b", Dev("b", "Sony WH-1000XM4", isUsable: false));
+        Assert.Null(RuleEngine.PickTarget(rules, snap));
     }
 }

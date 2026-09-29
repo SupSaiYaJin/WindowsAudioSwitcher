@@ -44,6 +44,18 @@ public partial class App : Application
     private DispatcherTimer? _applyDebounce;
     private static readonly TimeSpan ApplyDebounceInterval = TimeSpan.FromMilliseconds(350);
 
+    // Periodic liveness re-apply. A USB wireless receiver (e.g. the INZONE H9 II
+    // dongle) keeps its endpoints Active even when the paired headset is powered
+    // off, and the power toggle fires no device event at all. The dongle's vendor
+    // HID status (see InzoneDongleStatus) feeds the usability flag, so simply
+    // re-running the rule engine here handles both directions of a silent toggle:
+    //   headset off   -> dongle-connected default becomes unusable -> fall back,
+    //   headset on    -> it becomes the best rule target again       -> re-claim.
+    // ApplyRules is a no-op (no SetDefault, no toast) when the best target is
+    // already the default, so steady-state ticks only cost one COM enumeration.
+    private DispatcherTimer? _livenessTimer;
+    private static readonly TimeSpan LivenessInterval = TimeSpan.FromSeconds(10);
+
     public event Action<ApplyResult>? RulesApplied;
 
     /// <summary>Latest release info if a newer version was found at startup. Null until checked.</summary>
@@ -124,6 +136,10 @@ public partial class App : Application
                 ApplyRules(initialRun: false);
             };
 
+            _livenessTimer = new DispatcherTimer { Interval = LivenessInterval };
+            _livenessTimer.Tick += LivenessTimer_Tick;
+            _livenessTimer.Start();
+
             CreateTrayIcon();
             Logger.Info("Tray icon created.");
 
@@ -177,6 +193,24 @@ public partial class App : Application
         Logger.Info("DevicesChanged event received (queued for debounce).");
         _applyDebounce?.Stop();
         _applyDebounce?.Start();
+    }
+
+    /// <summary>
+    /// Periodic fallback re-apply for power toggles that never surface as device
+    /// events (a dongle-connected headset switching on/off). See the comment on
+    /// <see cref="LivenessInterval"/>; ApplyRules itself no-ops when nothing changed.
+    /// </summary>
+    private void LivenessTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_deviceManager == null) return;
+        try
+        {
+            ApplyRules(initialRun: false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error("Liveness check failed", ex);
+        }
     }
 
     public void ApplyRules(bool initialRun)
@@ -425,6 +459,8 @@ public partial class App : Application
         // silently lost when we tear down here.
         try { _settingsWindow?.FlushPendingSave(); }
         catch (Exception ex) { Logger.Warn($"FlushPendingSave on exit failed: {ex.Message}"); }
+        _applyDebounce?.Stop();
+        _livenessTimer?.Stop();
         try
         {
             _tray?.Dispose();

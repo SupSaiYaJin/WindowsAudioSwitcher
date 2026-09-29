@@ -47,6 +47,10 @@ Grab the latest setup from the [Releases page](https://github.com/mariosemes/Win
 
 The app re-evaluates priorities automatically on device add/remove and whenever Windows changes the default endpoint. You can also force a re-evaluation from the tray menu → **Apply rules now**.
 
+## How device availability is detected
+
+A USB wireless receiver (e.g. the Sony INZONE H9 II dongle) keeps its audio endpoints alive even when the headset is switched off — so the app talks to the dongle's vendor HID interface to learn the real link state (and battery) instead. Adding support for another USB-dongle headset? The reverse-engineering playbook lives in [`docs/usb-dongle-link-detection.md`](docs/usb-dongle-link-detection.md).
+
 ## Settings location
 
 Your priority list is stored as JSON at:

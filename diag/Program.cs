@@ -12,7 +12,7 @@ using (var mgr = new AudioDeviceManager(null))
     {
         var snap = mgr.Snapshot(flow);
         foreach (var d in snap.Devices)
-            Console.WriteLine($"  [{d.Kind}] usable={d.IsUsable}  {d.FriendlyName}");
+            Console.WriteLine($"  [{d.Kind}] usable={d.IsUsable}  id={d.Id}  {d.FriendlyName}");
     }
 
     Console.WriteLine("=== Default liveness probe (rule engine re-apply path) ===");

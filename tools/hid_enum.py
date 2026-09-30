@@ -1,7 +1,10 @@
+import sys
+
 import hid
 
-print("=== All Sony (0x054C) HID devices ===")
-devs = hid.enumerate(0x054C)
+vid = int(sys.argv[1], 0) if len(sys.argv) > 1 else 0x054C
+print(f"=== All HID devices with VID 0x{vid:04X} ===")
+devs = hid.enumerate(vid)
 if not devs:
     print("none found, listing devices with 'INZONE' or 'Sony' in name:")
     for d in hid.enumerate():

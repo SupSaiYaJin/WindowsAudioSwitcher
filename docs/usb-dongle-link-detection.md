@@ -2,8 +2,9 @@
 
 A reusable playbook for adding "real link state" detection for a new USB
 wireless headset (dongle-based) to this app. Written after reverse-engineering
-the Sony INZONE H9 II; the method generalizes, the protocol details are
-INZONE-specific.
+the Sony INZONE H9 II, then validated end-to-end on a second, entirely
+different protocol family (HECATE GX03 Ultra — see case study below). The
+method generalizes; the protocol details are device-specific.
 
 ## The problem
 
@@ -18,8 +19,18 @@ dongle's **vendor-defined HID interface**, which the vendor's own companion app
 
 ## Recon checklist for a new headset
 
-Work through these in order. The INZONE H9 II was cracked at step 1 + 5.
+Work through these in order. INZONE was cracked at step 1 + 5; HECATE needed
+the vendor-app route (step 0) because HeadsetControl had nothing.
 
+0. **Mine the vendor companion app's files first.** The install directory is a
+   protocol treasure chest: `data/devices/*.json` often declares the VID/PID,
+   capability flags (`need_check_connected`, `support_box_battery`) and even
+   the control-channel path segments (HECATE: `"hid_path_feature":
+   "mi_04&col03"`); `data/deviceresource/*/extrainfo.json` gives firmware
+   versions (useful for validating captured bytes); native DLLs and strings
+   reveal the chip vendor (JieLi/"JL" RCSP, Sony HCI, ...) which narrows the
+   protocol family. `tools/hecate_pe_dump.py` is a template for dumping
+   exports/imports/strings from those DLLs.
 1. **Check [HeadsetControl](https://github.com/Sapd/HeadsetControl) first.**
    `lib/devices/*.hpp` in that repo contains ready-made protocol code for many
    gaming headsets. Same vendor / same product line often means the same
@@ -36,10 +47,17 @@ Work through these in order. The INZONE H9 II was cracked at step 1 + 5.
    USBPcap + Wireshark, filter `usb.idVendor == 0x...`, then
    `usb.setup.bRequest == 0x09` (SET_REPORT) / `0x01` (GET_REPORT) and
    interrupt transfers. The query command and the state bytes appear in
-   `Leftover Capture Data`.
-5. **Replay the query from Python** (`tools/inzone_status.py` is a working
-   template) and verify it flips with the headset's power state. Only then port
-   to C#.
+   `Leftover Capture Data`. Without USBPcap, Frida-hooking the app's HID API
+   works: `tools/hecate_frida_hook.js` + `tools/hecate_frida_capture*.py`
+   (CreateFileW/WriteFile/ReadFile/HidD_SetFeature/HidD_GetFeature). Two
+   Frida traps: **the real I/O may live in a child process** (HECATE.exe
+   spawns another HECATE.exe — hook *all* processes of the app, not the
+   first), and on Frida 17 `Module.getExportByName` is gone (use
+   `Module.getGlobalExportByName`), with HID.dll not yet mapped at spawn
+   time (install those hooks lazily, on the first matching CreateFileW).
+5. **Replay the query from Python** (`tools/inzone_status.py`,
+   `tools/hecate_col03_query.py` are working templates) and verify it flips
+   with the headset's power state. Only then port to C#.
 
 Tips that saved time here:
 
@@ -91,11 +109,50 @@ nothing on its own either. The battery GET therefore doubles as a liveness
 probe: answer within budget = on, budget expiry = off (also treat `0xFF` as
 off, per H5 semantics). A connected headset answers in <100 ms.
 
+## Case study: HECATE GX03 Ultra (JieLi chip, 2026-09)
+
+Dongle: VID `0x35BB`, PID `0xA217`, USB composite. Audio on MI_00; HID on
+MI_03 (vendor `0xFF02`, JieLi RCSP pushes starting `4a 4c` "JL" — separate
+protocol, not needed) and MI_04 with five top-level collections (COL01
+consumer, COL02–04 vendor `0xFF02`, COL05 telephony). **Control channel:
+MI_04 & COL03** — confirmed by the vendor app's own
+`data/devices/016_gx03.json` (`"hid_path_feature": "mi_04&col03"`) and
+behaviorally (it is the only collection that answers). On Windows the
+collection shows up in the HID device path as `&MI_04&COL03`, so path
+matching works here.
+
+Framing is trivial — report ID `0xD0` + VID as little-endian magic + command:
+
+```
+query (64-byte output report):  D0 35 BB 01 00 ... (zeros)
+answer (input report):          D0 35 BB 09 00 <flags> <headsetBat> <caseBat> ...
+                                                  [5]     [6]        [7]
+```
+
+- COL03 only accepts report-ID-0xD0 writes; anything else fails with -1.
+- The dongle **answers even with the headset off** — the opposite of INZONE.
+  Off = both battery bytes zero (`D0 35 BB 09 00 00 00 00 ...`), on = real
+  percentages (`... 03 64 64 ...` = 100%/100%). Verified ON 3/3, OFF 4/4.
+- **Trap:** don't use `[5]` (flags) for the connected decision — it takes
+  varying non-zero values while on (03, 07, 0f...) and zero while off, but
+  the battery bytes are the vendor app's authoritative source and stable.
+- Async pushes share the `D0 35 BB` header: `01 01`/`01 00` = link
+  up/down, `05 01 <st> <b1> <b2>` = battery, `07 02 <6b MAC>` = MAC,
+  `09 ...` = status/version (same event the query elicits), `02 06` =
+  ~30 s heartbeat with no state. Filter answers by `[3]==0x09 && [4]==0`.
+- The vendor app itself only *listens* on COL03 (180 s of zero writes
+  observed); our `D0 35 BB 01` query was found by probing, not by replay.
+
+Implementation: `src/WindowsAudioSwitcher/Audio/HecateDongleStatus.cs`
+(candidate preference: documented MI_04/COL03 path first, then every other
+writable collection; answer — on *or* off — caches the control path).
+
 ## Integration pattern in this app
 
-`src/WindowsAudioSwitcher/Audio/InzoneDongleStatus.cs` (C#, HidSharp) exposes
-`GetStatus() → InzoneStatus(DonglePresent, Connected, BatteryPercent)` with a
-2 s cache. Design decisions worth keeping for the next device:
+`src/WindowsAudioSwitcher/Audio/InzoneDongleStatus.cs` and
+`HecateDongleStatus.cs` (C#, HidSharp) each expose
+`GetStatus() → Status(DonglePresent, Connected, BatteryPercent)` with a 2 s
+cache. Design decisions worth keeping for the next device:
 
 - **`DonglePresent` must be distinguishable from `Connected`.** Presence =
   a known-PID device enumerates and a writable collection accepts our report;
@@ -104,16 +161,22 @@ off, per H5 semantics). A connected headset answers in <100 ms.
   gets re-probed.
 - Read budgets: 400 ms fast path, 300 ms per collection while identifying.
   Stale-report drain (few 50 ms reads) before each write; increment TID per
-  query and match it in the response.
-- `AudioDeviceManager.IsUsable(device, isDefault)`: INZONE-with-dongle is
-  **authoritative even for the current default** (no false negatives, unlike
-  an exclusive-mode `IAudioClient` probe). Everything else keeps
-  `isDefault || probe` — never evict a default because a game grabbed it
-  exclusively.
+  query and match it in the response. (HECATE needs no TID — the frame has
+  none; matching is by the fixed `0x09` event header.)
+- **"Offline" semantics differ per dongle.** INZONE: silence within the read
+  budget = off (the answer *is* the liveness signal). HECATE: the dongle
+  answers on/off alike, so a timeout is abnormal — both are treated as
+  `Connected=false`, which is the safe direction (never a false "usable").
+- `AudioDeviceManager.IsUsable(device, isDefault)`: INZONE- and
+  HECATE-with-dongle are **authoritative even for the current default** (no
+  false negatives, unlike an exclusive-mode `IAudioClient` probe). Family
+  match is by `FriendlyName` (contains "INZONE" / "HECATE" or "GX03").
+  Everything else keeps `isDefault || probe` — never evict a default because
+  a game grabbed it exclusively.
 - **Known trap:** marking the default device unconditionally usable
   (`usable = isDefault || …`) makes the rule engine re-pick the dead default
-  forever — eviction silently becomes a no-op. That's why INZONE is exempt
-  from the short-circuit.
+  forever — eviction silently becomes a no-op. That's why INZONE (and now
+  HECATE) are exempt from the short-circuit.
 - `App`'s 10 s liveness timer simply re-runs `ApplyRules` every tick. With the
   point above fixed, one mechanism covers both directions of a silent power
   toggle: headset off → dongle default becomes unusable → fall back; headset
@@ -128,9 +191,13 @@ For any new device implementation, before shipping:
 2. Headset off, wait 5–10 s → reports disconnected.
 3. Toggle on/off three times — every transition correct.
 4. Dongle unplugged → "not found", no crash.
-5. Vendor companion app running → still works (note if not).
-6. Through the real app: log lines (`INZONE device … => usable=…`) flip on
-   both transitions and the default actually moves.
+5. Vendor companion app running → still works (note if not). (HECATE: not
+   re-tested with the app running after implementation; capture phase proved
+   the collections open shared — see the tip below. INZONE: confirmed.)
+6. Through the real app: log lines (`INZONE device …` / `HECATE device …
+   => usable=…`) flip on both transitions and the default actually moves.
+   (GX03 acceptance 2026-09-30: toggles 3/3 correct, dongle replug
+   re-identifies the control channel with no crash, INZONE coexists.)
 
 ## Tool inventory
 
@@ -141,4 +208,8 @@ For any new device implementation, before shipping:
 | `tools/inzone_probe.py` | one-shot battery/link query against every vendor collection |
 | `tools/inzone_status.py` | standalone Python version of the final check (reference) |
 | `tools/inzone_h5.hpp` | HeadsetControl's INZONE H5 driver — protocol reference |
+| `tools/hecate_listen.py` | passive listener on all HECATE vendor collections |
+| `tools/hecate_pe_dump.py` | exports/imports/strings dump for vendor app DLLs |
+| `tools/hecate_frida_hook.js` + `hecate_frida_capture*.py` | Frida capture of the vendor app's HID I/O |
+| `tools/hecate_col03_query.py` | standalone COL03 status query — final reference check |
 | `diag/` | console harness that exercises the app's real `AudioDeviceManager` path |

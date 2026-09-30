@@ -23,6 +23,7 @@ public sealed class AudioDeviceManager : IDisposable, IMMNotificationClient
     private readonly ConcurrentDictionary<string, ProbeEntry> _probeCache = new();
     private static readonly TimeSpan ProbeCacheLifetime = TimeSpan.FromSeconds(8);
     private readonly InzoneDongleStatus _inzone = new();
+    private readonly HecateDongleStatus _hecate = new();
     private bool _disposed;
 
     private readonly record struct ProbeEntry(bool Usable, DateTimeOffset CheckedAt);
@@ -100,6 +101,11 @@ public sealed class AudioDeviceManager : IDisposable, IMMNotificationClient
     ///     to the current default as well, which is what lets the liveness timer evict
     ///     (and later re-claim) a dongle-connected default. When no dongle is present
     ///     (e.g. INZONE over Bluetooth) we fall back to the generic probe.</item>
+    ///   <item>HECATE wireless headsets (GX03 Ultra): same story — the dongle keeps its
+    ///     endpoints active with the headset off, but its vendor HID query answers with
+    ///     the true link state (<see cref="HecateDongleStatus"/>). Authoritative exactly
+    ///     like INZONE, so it also governs the current default. Without the dongle
+    ///     (e.g. the headset used over Bluetooth) we fall back to the generic probe.</item>
     ///   <item>Everything else: try to open a shared-mode IAudioClient stream. The
     ///     current default is exempt: if it is in exclusive use by another app the
     ///     probe would fail although the device is healthy, and we must not evict it
@@ -123,6 +129,15 @@ public sealed class AudioDeviceManager : IDisposable, IMMNotificationClient
             Logger.Info($"INZONE device '{device.FriendlyName}' dongle={status.DonglePresent} " +
                         $"connected={status.Connected} battery={status.BatteryPercent?.ToString() ?? "n/a"}% => usable={usable}");
         }
+        else if (IsHecate(device.FriendlyName))
+        {
+            var status = _hecate.GetStatus();
+            usable = status.DonglePresent
+                ? status.Connected
+                : isDefault || ProbeEndpoint(device); // BT fallback — keep default protection
+            Logger.Info($"HECATE device '{device.FriendlyName}' dongle={status.DonglePresent} " +
+                        $"connected={status.Connected} battery={status.BatteryPercent?.ToString() ?? "n/a"}% => usable={usable}");
+        }
         else
         {
             usable = isDefault || ProbeEndpoint(device);
@@ -130,6 +145,13 @@ public sealed class AudioDeviceManager : IDisposable, IMMNotificationClient
 
         _probeCache[id] = new ProbeEntry(usable, DateTimeOffset.Now);
         return usable;
+    }
+
+    /// <summary>HECATE dongle endpoints are matched by brand or model name.</summary>
+    private static bool IsHecate(string friendlyName)
+    {
+        return friendlyName.Contains("HECATE", StringComparison.OrdinalIgnoreCase)
+            || friendlyName.Contains("GX03", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
